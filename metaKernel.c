@@ -1,0 +1,116 @@
+  
+  #define TREELENGTH 5;
+
+  __device__ int getNodeValue(int *tree, float *data, int offset, const int treeIndex, const int dataIdx);
+
+  __device__ float getFloatNodeValue(int *tree, float *data, int offset, const int treeIndex, const int dataIdx){
+	int node = tree[treeIndex+offset];
+
+	if(node == 1000){		//variable. get value of the children and return the data value
+		int child1 = getNodeValue(tree, data, 2*offset + 1, treeIndex, dataIdx);			//variable
+		int child2 = 46 * getNodeValue(tree, data, 2*offset + 2, treeIndex, dataIdx);			//shift
+
+		return data[(dataIdx - child2)+  child1];
+	}
+	else if(node <= 1023){
+		float child1 = getFloatNodeValue(tree, data, 2*offset + 1, treeIndex, dataIdx);
+		float child2 = getFloatNodeValue(tree, data, 2*offset + 2, treeIndex, dataIdx);
+
+		float result = 0;
+
+		switch(node){
+			case 1020:
+				result = child1 + child2;
+				break;
+			case 1021:
+				result = child1 - child2;
+				break;
+			case 1022:
+				result = child1 / child2;
+				break;
+			case 1023:
+				result = child1 * child2;
+				break;
+		};
+		return result;
+	}
+
+	return 1.0;
+
+  }
+
+  __device__ int getNodeValue(int *tree, float *data, int offset, const int treeIndex, const int dataIdx){
+	int node = tree[treeIndex+offset];
+	
+	if(node < 1000) return node;  	//return the integer value of the node 
+	
+	else if(node <= 1006){
+		int child1 = getNodeValue(tree, data, 2*offset + 1, treeIndex, dataIdx);
+		int child2 = getNodeValue(tree, data, 2*offset + 2, treeIndex, dataIdx);
+		int result;
+
+		switch(node){
+			case 1001:
+				result = child1 && child2;
+				break;
+			case 1002:
+				result = child1 || child2;
+				break;
+			case 1003:
+				result = child1 ^ child2;
+				break;
+			case 1004:
+				result = child1 && !child2;
+				break;
+			case 1005:
+				result = child1 || !child2;
+				break;
+			case 1006:
+				result = child1 ^ !child2;
+				break;
+		}
+		return result;
+	}
+	else if(node <= 1015){
+		float child1 = getFloatNodeValue(tree, data, 2*offset + 1, treeIndex, dataIdx);
+		float child2 = getFloatNodeValue(tree, data, 2*offset + 2, treeIndex, dataIdx);
+		int result;
+
+		switch(node){
+			case 1010:
+				result = child1 == child2;
+				break;
+			case 1011:
+				result = child1 >= child2;
+				break;
+			case 1012:
+				result = child1 <= child2;
+				break;
+			case 1013:
+				result = child1 > !child2;
+				break;
+			case 1014:
+				result = child1 < !child2;
+				break;
+			case 1015:
+				result = child1 != !child2;
+				break;
+		};
+		return result;
+	}
+
+	return 1;
+  }
+
+  __global__ void fitness(int *tree, float *data ,int *winCounter, int *lossCounter)
+  {
+	const int treeNum = (blockIdx.x*blockDim.x + threadIdx.x);
+	const int treeIndex = treeNum * TREELENGTH;
+	const int dataIdx = blockIdx.y*blockDim.y + threadIdx.y;
+
+	if(dataIdx < 50) return;	//return to avoid out of array for time shifts
+
+	int result = getNodeValue(tree, data, 0, treeIndex, dataIdx);
+	
+   	return;
+  }

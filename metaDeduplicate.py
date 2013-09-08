@@ -1,0 +1,467 @@
+import pycuda.driver as cuda
+#import readCSV
+from pycuda import driver, compiler, gpuarray, tools, driver
+import pycuda.autoinit
+import numpy
+import time
+from pycuda.compiler import SourceModule
+#import metaGenome as genome
+from pymongo import Connection
+import datetime
+import math
+import matplotlib.pyplot as plt
+
+# mongo init
+
+connection = Connection('localhost', 27017)
+db = connection.genome
+genomeCollection = db['genomeArchive']
+dataCollection = db['priceData']
+
+genomes = genomeCollection.find({}).sort('expectancy', -1)
+
+pairs = set()
+duplicates = 0
+totalGenomes = genomes.count()
+
+for genome in genomes:
+	genome["orderType"] = "buy"
+	genomeCollection.save(genome)
+	pair = tuple( [genome['expectancy'], genome['trades']] )
+	print pair
+	if pair in pairs:
+		duplicates += 1
+		genomeCollection.remove(genome)
+	else:
+		pairs.add(pair)
+
+print "Duplicates ", duplicates
+print "Total ", totalGenomes - duplicates
+
+startCount = genomeCollection.count()
+
+
+# Remove the genomes that are shit
+genomes = genomeCollection.find({'expectancy': {'$gt': 10}})
+for x in genomes:
+	genomeCollection.remove(x)
+
+genomes = genomeCollection.find({'expectancy': {'$lt': 4}})
+for x in genomes:
+	genomeCollection.remove(x)
+
+genomes = genomeCollection.find({'trades': {'$lt': 100}})
+for x in genomes:
+	genomeCollection.remove(x)
+
+genomes = genomeCollection.find({'trades': {'$gt': 250}})
+for x in genomes:
+	genomeCollection.remove(x)
+
+endCount = genomeCollection.count()
+print "Removed ", startCount - endCount, " genomes"
+print "Total ", endCount
+
+
+
+## 45 is the amount of columns in the data array
+## 10 is the amount of threads in a block
+mod = SourceModule("""
+  
+  #define TREELENGTH 63;
+  #define POOLSIZE 1000;
+  #define BINS 12;
+
+  __shared__ float sharedTree[63];
+
+  __device__ int getNodeValue(float *data, int offset, const int dataIdx);
+
+  __device__ float getFloatNodeValue(float *data, int offset, const int dataIdx){
+	int node = sharedTree[offset]; //Change to float
+	
+	if(offset > 30) return 0.0;
+	if(node < 1000) return sharedTree[offset];
+
+	if(node == 1000){		//variable. get value of the children and return the data value
+		int child1 = getNodeValue(data, (2*offset + 1), dataIdx);			//variable
+		int child2 = getNodeValue(data, (2*offset + 2), dataIdx);			//shift
+
+		if(child1 > 45 or child1 < 0) child1 = 45;
+		if(child2 > 45 or child2 < 0) child2 = 45;
+
+		return data[(dataIdx - 46 * child2)+  child1];
+	}
+	else if(node <= 1064){
+		float child1 = getFloatNodeValue(data, (2*offset + 1), dataIdx);
+		float child2 = getFloatNodeValue(data, (2*offset + 2), dataIdx);
+
+		float result = 0;
+
+		switch(node){
+			case 1020:
+				result = child1 + child2;
+				break;
+			case 1021:
+				result = child1 - child2;
+				break;
+			case 1022:
+				result = fdividef(child1, child2);
+				break;
+			case 1023:
+				result = child1 * child2;
+				break;
+			case 1024:
+				result = acosf(child1);
+				break;
+			case 1025:
+				result = acoshf(child1);
+				break;
+			case 1026:
+				result = asinf(child1);
+				break;
+			case 1027:
+				result = asinhf(child1);
+				break;
+			case 1028:
+				result = atanf(child1);
+				break;
+			case 1029:
+				result = atanhf(child1);
+				break;
+			case 1030:
+				result = cbrtf(child1);
+				break;
+			case 1031:
+				result = ceilf(child1);
+				break;
+			case 1032:
+				result = cosf(child1);
+				break;
+			case 1033:
+				result = coshf(child1);
+				break;
+			case 1034:
+				result = cospif(child1);
+				break;
+			case 1035:
+				result = erfcf(child1);
+				break;
+			case 1036:
+				result = erfcinvf(child1);
+				break;
+			case 1037:
+				result = erfinvf(child1);
+				break;
+			case 1038:
+				result = erff(child1);
+				break;
+			case 1039:
+				result = exp10f(child1);
+				break;
+			case 1040:
+				result = exp2f(child1);
+				break;
+			case 1041:
+				result = expf(child1);
+				break;
+			case 1042:
+				result = expm1f(child1);
+				break;
+			case 1043:
+				result = fabsf(child1);
+				break;
+			case 1044:
+				result = floorf(child1);
+				break;
+			case 1045:
+				result = lgammaf(child1);
+				break;
+			case 1046:
+				result = log10f(child1);
+				break;
+			case 1047:
+				result = log1pf(child1);
+				break;
+			case 1048:
+				result = log2f(child1);
+				break;
+			case 1049:
+				result = logbf(child1);
+				break;
+			case 1050:
+				result = logf(child1);
+				break;
+			case 1051:
+				result = nearbyintf(child1);
+				break;
+			case 1052:
+				result = rcbrtf(child1);
+				break;
+			case 1053:
+				result = rintf(child1);
+				break;
+			case 1054:
+				result = roundf(child1);
+				break;
+			case 1055:
+				result = rsqrtf(child1);
+				break;
+			case 1056:
+				result = sinf(child1);
+				break;
+			case 1057:
+				result = logf(child1);
+				break;
+			case 1058:
+				result = sinhf(child1);
+				break;
+			case 1059:
+				result = sinpif(child1);
+				break;
+			case 1060:
+				result = sqrtf(child1);
+				break;
+			case 1061:
+				result = tanf(child1);
+				break;
+			case 1062:
+				result = tanhf(child1);
+				break;
+			case 1063:
+				result = tgammaf(child1);
+				break;
+			case 1064:
+				result = truncf(child1);
+			
+		};
+		return result;
+	}
+
+	return 0.0;
+
+  }
+
+  __device__ int getNodeValue(float *data, int offset, const int dataIdx){
+	int node = sharedTree[offset];
+	
+	if(offset > 30) return 0;
+
+	if(node < 1000) return node;  	//return the integer value of the node 
+	else if(node == 1000){}
+	
+	else if(node <= 1006){
+		int child1 = getNodeValue(data, 2*offset + 1, dataIdx);
+		int child2 = getNodeValue(data, 2*offset + 2, dataIdx);
+		int result = 0;
+
+		switch(node){
+			case 1001:
+				result = child1 && child2;
+				break;
+			case 1002:
+				result = child1 || child2;
+				break;
+			case 1003:
+				result = child1 ^ child2;
+				break;
+			case 1004:
+				result = child1 && !child2;
+				break;
+			case 1005:
+				result = child1 || !child2;
+				break;
+			case 1006:
+				result = child1 ^ !child2;
+				break;
+		}
+		return result;
+	}
+	else if(node <= 1015){
+		float child1 = getFloatNodeValue(data, 2*offset + 1, dataIdx);
+		float child2 = getFloatNodeValue(data, 2*offset + 2, dataIdx);
+		int result = 0;
+
+		switch(node){
+			case 1010:
+				result = child1 == child2;
+				break;
+			case 1011:
+				result = child1 >= child2;
+				break;
+			case 1012:
+				result = child1 <= child2;
+				break;
+			case 1013:
+				result = child1 > !child2;
+				break;
+			case 1014:
+				result = child1 < !child2;
+				break;
+			case 1015:
+				result = child1 != !child2;
+				break;
+		};
+		return result;
+	} else if(node <= 1023) {}
+
+	return 0;
+  }
+
+  __global__ void calc(float *tree, float *data , bool *winnerTable, int datalength)
+  {
+	const int treeNum = blockIdx.x;
+	const int treeIndex = treeNum * TREELENGTH;
+
+
+	if(threadIdx.y < 63 ){
+
+
+		sharedTree[threadIdx.y] = tree[treeIndex + threadIdx.y];
+
+	}
+	__syncthreads();
+
+	const int thredIdx = (blockIdx.y*blockDim.y + threadIdx.y);
+	const int dataIdx = 46*thredIdx;
+	const int winnerOffset = datalength * treeNum;
+
+	if(thredIdx <= 46) return;
+
+	winnerTable[winnerOffset + thredIdx] = getNodeValue(data, 0, dataIdx);
+
+   	return;
+  }
+
+  """)
+
+
+##########################
+# Program start
+##########################
+
+genomes = genomeCollection.find({}).sort('expectancy', -1)
+
+treeLength = 6
+poolSize = genomes.count()
+startDate = datetime.datetime(2011, 3, 1, 0, 0)
+endDate = datetime.datetime(2011, 10, 1, 0, 0)
+
+
+data = []
+
+
+for dataPoint in dataCollection.find({'datetime': {'$gt': startDate , '$lt': endDate }, 'ticker': 'AUDUSD' }).sort("datetime"):
+	data.append( dataPoint["data"] )
+
+
+print "#### Data length:", len(data)
+
+
+dataLength = len(data)
+
+data = numpy.array(data).astype(numpy.float32)
+data_gpu = cuda.mem_alloc(data.nbytes)
+cuda.memcpy_htod(data_gpu, data)
+
+
+
+trees = []
+for x in genomes:
+	trees.append( x['genome'] )
+	
+### Main Loop
+dataDim = math.floor(len(data)/64.0)
+
+
+winnerTable = numpy.zeros(len(data) * poolSize, dtype=numpy.bool)
+winnerTable_gpu = cuda.mem_alloc(winnerTable.nbytes)
+cuda.memcpy_htod(winnerTable_gpu, winnerTable)
+
+trees = numpy.array(trees).astype(numpy.float32)
+trees_gpu = cuda.mem_alloc(trees.nbytes)
+cuda.memcpy_htod(trees_gpu, trees)
+
+
+calc = mod.get_function("calc")
+
+start = time.time()
+calc(trees_gpu, data_gpu, winnerTable_gpu, numpy.int32(len(data)), block=(1, 64, 1), grid=(len(trees),int(dataDim))) # x is the tree index, y is the data index
+
+		 
+winnerTable = numpy.empty_like(winnerTable)
+cuda.memcpy_dtoh(winnerTable, winnerTable_gpu)
+
+genomes = genomeCollection.find({}).sort('expectancy', -1)
+tradingPool = winnerTable[0: dataLength]
+tradingGenomes = [genomes[0]]
+
+print tradingPool[0]
+
+for x in range(1, len(trees)):
+	currentWinnerTable = winnerTable[x*dataLength: (x+1)*dataLength]
+	
+	same = 0
+	total = 0
+	for y in range(len(currentWinnerTable)):
+		if currentWinnerTable[y]:
+			total += 1
+		if (currentWinnerTable[y] and tradingPool[y]):
+			same += 1
+	same = 100*same/total
+	print same
+
+	if same < 50:
+		changes = 0
+		tradingGenomes.append(genomes[x])
+		for y in range(len(currentWinnerTable)):
+			if currentWinnerTable[y] and (not tradingPool[y]):
+				tradingPool[y] = True
+				changes += 1
+		print "# changes", changes
+
+		same = 0
+		total = 0
+		for y in range(len(currentWinnerTable)):
+			if currentWinnerTable[y]:
+				total += 1
+			if (currentWinnerTable[y] and tradingPool[y]):
+				same += 1
+		same = 100*same/dataLength
+		print "#####", same
+	
+
+
+print "Trading pool size ", len(tradingGenomes)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
